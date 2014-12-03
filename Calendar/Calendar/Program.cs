@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Globalization;
 using System.Drawing;
-using System.Collections.Generic;
 using System.Linq;
 
 namespace Calendar
@@ -21,7 +20,7 @@ namespace Calendar
             {
                 using (var graphics = Graphics.FromImage(bitmap))
                 {
-                    new CalendarPainter(bitmap.Size, graphics, datetime).Draw();
+                    new CalendarPainter(bitmap.Size, graphics, new Month(datetime)).Draw();
                 }
                 bitmap.Save(bitmapName);
             }
@@ -31,34 +30,42 @@ namespace Calendar
     internal class Month
     {
         public string Title { get; private set; }
-        public List<int[]> Weeks { get; private set; }
-        public Tuple<int, int> CurrentDay { get; private set; }
-        public int FirstWeek { get; private set; }
-
+        public Tuple<string, string[]>[] Weeks { get; private set; }
+        public int CurrentWeekIndex { get; private set; }
+        public int CurrentDayOfWeek { get; private set; }
+        private DateTime Day;
+        
         public Month(DateTime day)
         {
             Title = day.ToString("MMMM yyyy");
-            FirstWeek = GetWeekOfYear(new DateTime(day.Year, day.Month, 1));
-            CurrentDay = Tuple.Create(GetWeekOfYear(day) - FirstWeek, (int)day.DayOfWeek);
-            Weeks = new List<int[]>();
-            for (var i = 1; i <= DateTime.DaysInMonth(day.Year, day.Month); i++)
+            Day = day;
+            CurrentDayOfWeek = (int)Day.DayOfWeek;
+            var firstWeek = GetWeekOfYear(new DateTime(day.Year, day.Month, 1));
+            CurrentWeekIndex = GetWeekOfYear(Day) - firstWeek;
+            ArrangeWeeks();
+        }
+
+        private void ArrangeWeeks()
+        {
+            var day = new DateTime(1, 1, 1);
+            day = day.AddDays(7 - (int) day.DayOfWeek);
+            var weekTitles = Enumerable.Range(0, 7)
+                .Select(i => day.AddDays(i).ToString("ddd").ToUpper())
+                .ToArray();
+            var weeksFirstElement = new Tuple<string, string[]>[]
             {
-                var dayOfMonth = new DateTime(day.Year, day.Month, i);
-                AddDay(dayOfMonth);
-            }
-        }
-
-        public IEnumerable<int> GetWeekNumbers()
-        {
-            return Enumerable.Range(0, Weeks.Count).Select(z => z + FirstWeek);
-        }
-
-        private void AddDay(DateTime day)
-        {
-            var week = GetWeekOfYear(day) - FirstWeek;
-            if (week >= Weeks.Count)
-                Weeks.Add(new int[7]);
-            Weeks[week][(int) day.DayOfWeek] = day.Day;
+                Tuple.Create("#", weekTitles)
+            };
+            Weeks = weeksFirstElement.Concat(
+                Enumerable.Range(1, DateTime.DaysInMonth(Day.Year, Day.Month))
+                    .Select(z => new DateTime(Day.Year, Day.Month, z))
+                    .GroupBy(GetWeekOfYear)
+                    .Select(z => Tuple.Create(z.Key, z
+                        .Select(x => x.ToString("dd"))
+                        .ToArray()))
+                    .OrderBy(z => z.Item1)
+                    .Select(z => Tuple.Create(z.Item1.ToString(), z.Item2))
+                ).ToArray();
         }
 
         private int GetWeekOfYear(DateTime day)
@@ -75,12 +82,12 @@ namespace Calendar
         private Graphics Graphics;
         private Month Month; 
 
-        public CalendarPainter(Size contextSize, Graphics graphics, DateTime day)
+        public CalendarPainter(Size contextSize, Graphics graphics, Month month)
         {
             graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             ContextSize = contextSize;
             Graphics = graphics;
-            Month = new Month(day);
+            Month = month;
         }
 
         public PointF MapGrid(PointF locationOnGrid)
@@ -97,69 +104,58 @@ namespace Calendar
             Graphics.DrawString(text, font, new SolidBrush(color), MapGrid(locationOnGrid), stringFormat);
         }
 
-        private void SelectDay(Month month)
+        private void SelectDay()
         {
-            var center = MapGrid(new PointF(month.CurrentDay.Item2 + 1,month.CurrentDay.Item1 + 2));
+            var center = MapGrid(new PointF(Month.CurrentDayOfWeek + 1, Month.CurrentWeekIndex + 2));
             var radius = Math.Min(ContextSize.Width, ContextSize.Height) /16f;
             var brush = new SolidBrush(Color.PowderBlue);
             Graphics.FillEllipse(brush, center.X - radius, center.Y - radius, radius * 2, radius * 2);
         }
 
-        private void DrawTitle(Month month)
+        private void DrawTitle()
         {
             var location = new PointF(3.5f, 0f);
             var font = new Font(FontName, 20, FontStyle.Bold);
-            DrawText(month.Title, font, Color.Gray, location);
+            DrawText(Month.Title, font, Color.Gray, location);
         }
 
-        private void DrawWeekNumbers(Month month)
+        private void DrawWeekNumbers()
         {
-            foreach(var weekNumber in month.GetWeekNumbers())
+            var gridY = 1;
+            foreach(var weekNumber in Month.Weeks.Select(z => z.Item1))
             {
-                var locationOnGrid = new PointF(0, weekNumber - month.FirstWeek + 2);
+                var locationOnGrid = new PointF(0, gridY);
+                gridY++;
                 var font = new Font(FontName, 30);
                 DrawText(weekNumber.ToString(), font, Color.DodgerBlue, locationOnGrid);
             }
         }
 
-        private void DrawWeekTitles()
+        private void DrawDays()
         {
-            var day = new DateTime(1, 1, 1);
-            day = day.AddDays(7 - (int)day.DayOfWeek);
-            var font = new Font(FontName, 25);
-            var locationOnGrid = new PointF(0, 1);
-            DrawText("#", font, Color.Gray, locationOnGrid);
-            for (var i = 0; i < 7; i++)
+            for (var i = 0; i < Month.Weeks.Length; i++)
             {
-                locationOnGrid = new PointF(i + 1, 1);
-                DrawText(day.ToString("ddd").ToUpper(), font, Color.Gray, locationOnGrid);
-                day = day.AddDays(1);
+                var start = 0;
+                if (i == 1)
+                    start = 7 - Month.Weeks[i].Item2.Length;
+                for (var j = 0; j < Month.Weeks[i].Item2.Length; j++)
+                {
+                    var font = new Font(FontName, 30);
+                    var color = (j + start == 0) ? Color.LightCoral : Color.Gray;
+                    var locationOnGrid = new PointF(1 + j + start, 1 + i);
+                    DrawText(Month.Weeks[i].Item2[j], font, color, locationOnGrid);
+                }
             }
-        }
-
-        private void DrawDays(Month month)
-        {
-            for (var i = 0; i < month.Weeks.Count; i++)
-                for (var j = 0; j < 7; j++)
-                    if (month.Weeks[i][j] != 0)
-                    {
-                        var locationOnGrid = new PointF(j + 1, i + 2);
-                        var color = j == 0 ? Color.LightCoral : Color.Gray;
-                        var font = new Font(FontName, 30);
-                        DrawText(month.Weeks[i][j].ToString(), font, color, locationOnGrid);
-                    }
         }
 
         public void Draw()
         {
             var brush = new SolidBrush(Color.WhiteSmoke);
             Graphics.FillRectangle(brush, 0, 0, ContextSize.Width, ContextSize.Height);
-            DrawTitle(Month);
-            DrawWeekTitles();
-            SelectDay(Month);
-            DrawDays(Month);
-            DrawWeekNumbers(Month);
+            DrawTitle();
+            SelectDay();
+            DrawDays();
+            DrawWeekNumbers();
         }
-
     }
 }
